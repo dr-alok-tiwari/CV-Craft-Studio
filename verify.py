@@ -65,7 +65,7 @@ print(f"[OK] LaTeX Export: {len(tex)} chars")
 from modules.ats_rewriter import rewrite_resume_from_ats
 rewrite_result = rewrite_resume_from_ats(DEMO_BUILDER_DATA, parsed, score, match)
 assert rewrite_result.get('resume_data') and rewrite_result.get('new_score') is not None
-print(f"[OK] ATS Rewrite: {rewrite_result.get('old_total')} -> {rewrite_result.get('new_total')}")
+print(f"[OK] ATS Rewrite: {rewrite_result.get('old_score')} -> {rewrite_result.get('new_score')}")
 
 # Test 11: HTML Template
 from modules.templates import render_resume_html

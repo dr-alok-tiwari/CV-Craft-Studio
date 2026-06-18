@@ -8,7 +8,7 @@ print("=" * 60)
 
 # Test 1: Parser
 from modules.parser import parse_resume, parse_resume_file, MAX_UPLOAD_BYTES
-from modules.sample_data import SAMPLE_FRESHER_RESUME, SAMPLE_JD_DATA_ANALYST, DEMO_BUILDER_DATA
+from modules.sample_data import SAMPLE_FRESHER_RESUME, SAMPLE_ACADEMIC_CV, SAMPLE_JD_DATA_ANALYST, DEMO_BUILDER_DATA
 parsed = parse_resume(SAMPLE_FRESHER_RESUME.encode(), 'test.txt')
 wc = parsed['word_count']
 sc = len([k for k, v in parsed['sections'].items() if k != '_header' and v.strip()])
@@ -22,11 +22,19 @@ try:
 except ValueError:
     print("[OK] Upload Guard: files over 10 MB are rejected")
 
-# Test 3: Scorer
-from modules.scorer import score_resume
+# Test 3: Role-aware Scorer
+from modules.scorer import score_resume, detect_resume_track
 score = score_resume(parsed)
+assert 'detected_track' in score and 'role_context' in score
 print(f"[OK] Scorer: {score['total_score']}/100 - {score['grade']}")
-print(f"     Red flags: {len(score['red_flags'])}")
+print(f"     Track: {score['role_context']['label']} | Red flags: {len(score['red_flags'])}")
+
+academic_parsed = parse_resume(SAMPLE_ACADEMIC_CV.encode(), 'academic.txt')
+academic_track = detect_resume_track(academic_parsed)
+academic_score = score_resume(academic_parsed)
+assert academic_track in {'academic_research', 'healthcare_analytics', 'general'}
+assert 'role_context' in academic_score
+print(f"[OK] Academic/Research Diagnostics: {academic_score['role_context']['label']} ({academic_score['role_context']['score']}/10)")
 
 # Test 4: JD Matcher
 from modules.jd_matcher import match_resume_to_jd

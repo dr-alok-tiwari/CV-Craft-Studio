@@ -1,14 +1,16 @@
 """
 CV-Craft-Studio - ATS Resume Scorer
 Transparent rule-based scoring system. No AI APIs.
+
+The scorer keeps a stable 100-point ATS score, and adds role-aware context
+for Academic/Research, Data/Analytics, Healthcare Analytics, Tech, Business,
+and general professional resumes.
 """
 
 import re
 from typing import Dict, List, Tuple
 
-# ─────────────────────────────────────────────
-# ACTION VERBS
-# ─────────────────────────────────────────────
+
 ACTION_VERBS = [
     'analyzed', 'designed', 'developed', 'implemented', 'optimized', 'automated',
     'led', 'coordinated', 'evaluated', 'improved', 'built', 'delivered',
@@ -43,20 +45,91 @@ WEAK_WORDS = [
 QUANT_PATTERNS = [
     r'\d+\s*%',
     r'\$\s*\d+',
-    r'\d+\s*(million|billion|thousand|k|m|b)',
-    r'\d+\s*(users|customers|clients|employees|team members|projects|reports)',
-    r'(increased|decreased|reduced|improved|grew|boosted|cut|saved).*\d+',
-    r'\d+x\s*(faster|better|more)',
+    r'\d+\s*(?:million|billion|thousand|k|m|b)',
+    r'\d+\s*(?:users|customers|clients|employees|team members|projects|reports|students|participants|papers|citations|classes|sessions|datasets|patients|images|records)',
+    r'(?:increased|decreased|reduced|improved|grew|boosted|cut|saved|achieved).*\d+',
+    r'\d+x\s*(?:faster|better|more)',
     r'from\s+\d+.*to\s+\d+',
     r'top\s+\d+',
-    r'\d+\s*(hours|days|weeks|months)',
+    r'\d+\s*(?:hours|days|weeks|months|years)',
     r'\d+\+',
 ]
 
+ROLE_PROFILES = {
+    'academic_research': {
+        'label': 'Academic / Research CV',
+        'signals': ['phd', 'research', 'publication', 'journal', 'conference', 'teaching', 'faculty', 'professor', 'assistant professor', 'doctoral', 'thesis', 'grant', 'reviewer', 'course', 'scholar'],
+        'keywords': ['research', 'publication', 'teaching', 'methodology', 'journal', 'conference', 'grant', 'supervision', 'curriculum', 'thesis', 'reviewer', 'citation', 'course', 'workshop'],
+    },
+    'healthcare_analytics': {
+        'label': 'Healthcare Analytics / AI in Healthcare',
+        'signals': ['healthcare', 'medical', 'clinical', 'patient', 'hospital', 'biomedical', 'diagnosis', 'mri', 'x-ray', 'ct', 'ehr', 'public health', 'epidemiology'],
+        'keywords': ['healthcare', 'clinical', 'patient', 'medical', 'biomedical', 'diagnosis', 'imaging', 'ehr', 'hospital', 'predictive modeling', 'ethics', 'privacy'],
+    },
+    'data_analytics': {
+        'label': 'Data / Analytics Resume',
+        'signals': ['data analyst', 'analytics', 'dashboard', 'sql', 'python', 'power bi', 'tableau', 'excel', 'kpi', 'forecasting', 'business intelligence'],
+        'keywords': ['python', 'sql', 'excel', 'dashboard', 'tableau', 'power bi', 'statistics', 'forecasting', 'etl', 'kpi', 'visualization', 'reporting'],
+    },
+    'software_tech': {
+        'label': 'Software / Tech Resume',
+        'signals': ['software', 'developer', 'engineer', 'api', 'backend', 'frontend', 'cloud', 'docker', 'kubernetes', 'github', 'devops', 'microservices'],
+        'keywords': ['software', 'api', 'cloud', 'docker', 'kubernetes', 'git', 'testing', 'deployment', 'architecture', 'backend', 'frontend', 'security'],
+    },
+    'business_management': {
+        'label': 'Business / Management Resume',
+        'signals': ['business analyst', 'management', 'stakeholder', 'strategy', 'consulting', 'market research', 'operations', 'sales', 'finance', 'risk'],
+        'keywords': ['stakeholder', 'strategy', 'process improvement', 'project management', 'consulting', 'market', 'operations', 'finance', 'risk', 'leadership'],
+    },
+    'general': {
+        'label': 'General ATS Resume',
+        'signals': [],
+        'keywords': [],
+    },
+}
 
-# ─────────────────────────────────────────────
-# SCORING FUNCTIONS
-# ─────────────────────────────────────────────
+
+def _phrase_in_text(text: str, phrase: str) -> bool:
+    """Safe phrase search that avoids substring false positives where possible."""
+    text = text.lower()
+    phrase = phrase.lower().strip()
+    if not phrase:
+        return False
+    pattern = re.escape(phrase)
+    if phrase[0].isalnum():
+        pattern = r'(?<![a-z0-9])' + pattern
+    if phrase[-1].isalnum():
+        pattern = pattern + r'(?![a-z0-9])'
+    return bool(re.search(pattern, text, re.IGNORECASE))
+
+
+def _count_phrases(text: str, phrases: List[str]) -> int:
+    return sum(1 for phrase in phrases if _phrase_in_text(text, phrase))
+
+
+def _detected_sections(parsed: Dict) -> List[str]:
+    sections = parsed.get('sections', {}) or {}
+    return [k for k, v in sections.items() if k != '_header' and str(v).strip()]
+
+
+def detect_resume_track(parsed: Dict) -> str:
+    """Auto-detect the most likely resume track from content signals."""
+    text = (parsed.get('raw_text') or '').lower()
+    sections = ' '.join(_detected_sections(parsed)).lower()
+    combined = f'{text}\n{sections}'
+    scores = {}
+    for key, profile in ROLE_PROFILES.items():
+        if key == 'general':
+            continue
+        signal_hits = _count_phrases(combined, profile['signals'])
+        keyword_hits = _count_phrases(combined, profile['keywords'])
+        scores[key] = signal_hits * 2 + keyword_hits
+
+    if not scores:
+        return 'general'
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 3 else 'general'
+
 
 def score_contact_info(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     """Score contact information (max 10)."""
@@ -118,9 +191,7 @@ def score_summary(parsed: Dict) -> Tuple[int, List[str], List[str]]:
         issues.append('Summary is too brief — expand to 40–100 words')
         score += 1
 
-    # Check for relevant keywords
-    lower = summary_text.lower()
-    keyword_hits = sum(1 for v in ACTION_VERBS[:20] if v in lower)
+    keyword_hits = _count_phrases(summary_text, ACTION_VERBS[:20])
     if keyword_hits >= 2:
         score += 2
         strengths.append('Summary uses strong action language')
@@ -145,20 +216,15 @@ def score_education(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     score += 5
     strengths.append('Education section present')
 
-    # Check for degree keywords
-    degree_keywords = ['bachelor', 'master', 'phd', 'b.tech', 'm.tech', 'mba',
-                       'bsc', 'msc', 'b.com', 'm.com', 'be', 'me', 'diploma',
-                       'degree', 'graduate', 'postgraduate', 'pgdm', 'bba']
-    has_degree = any(kw in edu_text.lower() for kw in degree_keywords)
+    degree_keywords = ['bachelor', 'master', 'phd', 'ph.d', 'b.tech', 'm.tech', 'mba', 'bsc', 'msc', 'b.com', 'm.com', 'be', 'me', 'diploma', 'degree', 'graduate', 'postgraduate', 'pgdm', 'bba']
+    has_degree = any(_phrase_in_text(edu_text, kw) for kw in degree_keywords)
     if has_degree:
         score += 3
         strengths.append('Degree/qualification mentioned')
     else:
         issues.append('Degree type not clearly mentioned')
 
-    # Check for dates
-    date_pattern = r'(20\d\d|19\d\d)'
-    if re.search(date_pattern, edu_text):
+    if re.search(r'(20\d\d|19\d\d)', edu_text):
         score += 2
         strengths.append('Education dates/years present')
     else:
@@ -182,7 +248,6 @@ def score_skills(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     score += 5
     strengths.append('Skills section present')
 
-    # Count skills (words/phrases separated by commas, bullets, newlines)
     skill_items = re.split(r'[,|\n•·\-]+', skills_text)
     skill_items = [s.strip() for s in skill_items if len(s.strip()) > 1]
     num_skills = len(skill_items)
@@ -198,21 +263,22 @@ def score_skills(parsed: Dict) -> Tuple[int, List[str], List[str]]:
         issues.append(f'Only {num_skills} skills listed — ATS needs more keywords')
         score += 1
 
-    # Check for technical terms
-    tech_terms = ['python', 'sql', 'excel', 'java', 'javascript', 'r', 'tableau',
-                  'powerbi', 'power bi', 'machine learning', 'deep learning', 'nlp',
-                  'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'git', 'html',
-                  'css', 'react', 'node', 'django', 'flask', 'spark', 'hadoop',
-                  'sas', 'spss', 'stata', 'matlab', 'tensorflow', 'pytorch']
-    tech_hits = sum(1 for t in tech_terms if t in skills_text.lower())
+    tech_terms = [
+        'python', 'sql', 'excel', 'java', 'javascript', 'r', 'tableau', 'powerbi', 'power bi',
+        'machine learning', 'deep learning', 'nlp', 'aws', 'azure', 'gcp', 'docker', 'kubernetes',
+        'git', 'html', 'css', 'react', 'node', 'django', 'flask', 'spark', 'hadoop', 'sas',
+        'spss', 'stata', 'matlab', 'tensorflow', 'pytorch', 'research design', 'statistical analysis',
+        'regression', 'survey design', 'clinical analytics', 'medical imaging'
+    ]
+    tech_hits = _count_phrases(skills_text, tech_terms)
     if tech_hits >= 3:
         score += 5
-        strengths.append(f'{tech_hits} technical tools/technologies mentioned')
+        strengths.append(f'{tech_hits} technical/research tools or methods mentioned')
     elif tech_hits >= 1:
         score += 2
-        issues.append('Include more specific tools and technologies')
+        issues.append('Include more specific tools, methods, and technologies')
     else:
-        issues.append('No specific technologies/tools detected in skills')
+        issues.append('No specific technologies/tools/methods detected in skills')
 
     return min(score, 15), strengths, issues
 
@@ -229,7 +295,6 @@ def score_experience(parsed: Dict) -> Tuple[int, List[str], List[str]]:
         issues.append('No experience, internship, or project content found')
         return 0, strengths, issues
 
-    # Count bullet points
     bullets = re.findall(r'^[•\-*\d+\.)]\s*.+', exp_text, re.MULTILINE)
     if len(bullets) >= 5:
         score += 8
@@ -240,28 +305,25 @@ def score_experience(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     else:
         issues.append('Use bullet points to list accomplishments — not paragraphs')
 
-    # Date presence
     if re.search(r'(20\d\d|19\d\d)', exp_text):
         score += 4
         strengths.append('Work/project dates present')
     else:
         issues.append('Add dates to experience/project entries')
 
-    # Has actual content
     if len(exp_text.split()) > 100:
         score += 4
         strengths.append('Experience section has sufficient detail')
     else:
         issues.append('Expand experience descriptions with more detail')
 
-    # Company/org names (heuristic: capitalized proper nouns)
     org_pattern = r'(?:at|@|for)\s+([A-Z][a-zA-Z0-9\s&,]+)'
     orgs = re.findall(org_pattern, exp_text)
     if orgs:
         score += 4
         strengths.append('Organization names detected in experience')
     else:
-        score += 2  # Partial credit
+        score += 2
 
     return min(score, 20), strengths, issues
 
@@ -269,12 +331,10 @@ def score_experience(parsed: Dict) -> Tuple[int, List[str], List[str]]:
 def score_action_verbs(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     """Score use of action verbs (max 10)."""
     text = parsed.get('raw_text', '').lower()
-    score = 0
     strengths = []
     issues = []
 
-    found_verbs = [v for v in ACTION_VERBS if v in text]
-    unique_verbs = list(set(found_verbs))
+    unique_verbs = sorted({verb for verb in ACTION_VERBS if _phrase_in_text(text, verb)})
 
     if len(unique_verbs) >= 8:
         score = 10
@@ -290,8 +350,7 @@ def score_action_verbs(parsed: Dict) -> Tuple[int, List[str], List[str]]:
         score = 1
         issues.append('Almost no action verbs found — critical issue')
 
-    # Check for weak language
-    weak_found = [w for w in WEAK_WORDS if w in text]
+    weak_found = [word for word in WEAK_WORDS if _phrase_in_text(text, word)]
     if weak_found:
         issues.append(f'Weak phrasing detected: {", ".join(weak_found[:3])}')
 
@@ -301,16 +360,13 @@ def score_action_verbs(parsed: Dict) -> Tuple[int, List[str], List[str]]:
 def score_quantified(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     """Score quantified achievements (max 10)."""
     text = parsed.get('raw_text', '')
-    score = 0
     strengths = []
     issues = []
 
     quant_hits = []
     for pattern in QUANT_PATTERNS:
-        matches = re.findall(pattern, text, re.IGNORECASE)
-        quant_hits.extend(matches)
-
-    unique_hits = len(set(str(h) for h in quant_hits))
+        quant_hits.extend(re.findall(pattern, text, re.IGNORECASE))
+    unique_hits = len(set(str(hit) for hit in quant_hits))
 
     if unique_hits >= 5:
         score = 10
@@ -332,24 +388,18 @@ def score_quantified(parsed: Dict) -> Tuple[int, List[str], List[str]]:
 def score_ats_formatting(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     """Score ATS formatting simplicity (max 10)."""
     text = parsed.get('raw_text', '')
-    score = 8  # Start high, deduct
-    strengths = []
+    score = 8
+    strengths = ['Standard text content detected (ATS-readable)']
     issues = []
 
-    strengths.append('Standard text content detected (ATS-readable)')
-
-    # Check for overly complex formatting signals
     if len(re.findall(r'[|│]', text)) > 10:
         score -= 2
         issues.append('Possible table or column separator detected — avoid in ATS version')
-
     if len(re.findall(r'[★☆●○■□►▶]', text)) > 3:
         score -= 2
         issues.append('Special symbols/graphics detected — may confuse ATS parsers')
 
-    # Check for clear section headings
-    sections = parsed.get('sections', {})
-    detected_sections = [k for k in sections if k != '_header' and sections[k].strip()]
+    detected_sections = _detected_sections(parsed)
     if len(detected_sections) >= 4:
         score += 2
         strengths.append(f'{len(detected_sections)} distinct sections detected')
@@ -363,7 +413,6 @@ def score_length_readability(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     """Score resume length and readability (max 5)."""
     text = parsed.get('raw_text', '')
     word_count = len(text.split())
-    score = 0
     strengths = []
     issues = []
 
@@ -386,19 +435,105 @@ def score_length_readability(parsed: Dict) -> Tuple[int, List[str], List[str]]:
     return min(score, 5), strengths, issues
 
 
-# ─────────────────────────────────────────────
-# RED FLAG DETECTOR
-# ─────────────────────────────────────────────
+def score_role_context(parsed: Dict, track: str) -> Dict:
+    """Return role-aware diagnostics without changing the 100-point ATS score."""
+    text = parsed.get('raw_text', '')
+    sections = parsed.get('sections', {}) or {}
+    profile = ROLE_PROFILES.get(track, ROLE_PROFILES['general'])
+    label = profile['label']
+    keywords = profile.get('keywords', [])
+    matched_keywords = [kw for kw in keywords if _phrase_in_text(text, kw)]
+    score = min(6, len(matched_keywords))
+    strengths = []
+    issues = []
+    suggestions = []
 
-def detect_red_flags(parsed: Dict) -> List[Dict]:
+    if track == 'academic_research':
+        if sections.get('publications') or _phrase_in_text(text, 'publication') or _phrase_in_text(text, 'journal'):
+            score += 2
+            strengths.append('Academic evidence detected: publications/research outputs are visible')
+        else:
+            issues.append('Academic CV mode: add a Publications / Working Papers section if applicable')
+        if _phrase_in_text(text, 'teaching') or _phrase_in_text(text, 'course') or _phrase_in_text(text, 'class'):
+            score += 1
+            strengths.append('Teaching evidence detected')
+        else:
+            suggestions.append('Academic CV mode: add Teaching Experience, courses taught, sessions, evaluations, or student mentoring')
+        if any(_phrase_in_text(text, term) for term in ['methodology', 'regression', 'machine learning', 'qualitative', 'quantitative', 'survey', 'experiment', 'case study']):
+            score += 1
+            strengths.append('Research methods or analytical capability detected')
+        else:
+            suggestions.append('Academic CV mode: add research methods, datasets, tools, or domain techniques')
+        if not any(_phrase_in_text(text, term) for term in ['grant', 'funded', 'project', 'consulting', 'mdp', 'fdp', 'workshop']):
+            suggestions.append('Academic CV mode: add grants, sponsored projects, workshops/FDP/MDP, invited talks, or outreach where truthful')
+
+    elif track == 'healthcare_analytics':
+        if any(_phrase_in_text(text, term) for term in ['patient', 'clinical', 'hospital', 'medical imaging', 'mri', 'x-ray', 'ehr']):
+            score += 2
+            strengths.append('Healthcare domain evidence detected')
+        else:
+            issues.append('Healthcare role fit: add clinical/medical context, datasets, or healthcare outcomes if applicable')
+        if any(_phrase_in_text(text, term) for term in ['privacy', 'ethics', 'hipaa', 'consent', 'bias', 'fairness']):
+            score += 1
+        else:
+            suggestions.append('Healthcare role fit: mention privacy, ethics, fairness, validation, or clinical safety when relevant')
+
+    elif track == 'data_analytics':
+        if any(_phrase_in_text(text, term) for term in ['dashboard', 'kpi', 'power bi', 'tableau', 'sql', 'python']):
+            score += 2
+            strengths.append('Analytics tool/domain evidence detected')
+        else:
+            issues.append('Data role fit: add tools such as SQL, Python, Excel, Tableau/Power BI, dashboards, or KPIs')
+        if any(_phrase_in_text(text, term) for term in ['business impact', 'stakeholder', 'decision', 'reporting time', 'forecast']):
+            score += 1
+        else:
+            suggestions.append('Data role fit: connect analysis to business decisions, stakeholders, time savings, or revenue/cost impact')
+
+    elif track == 'software_tech':
+        if any(_phrase_in_text(text, term) for term in ['github', 'api', 'deployment', 'testing', 'docker', 'cloud', 'architecture']):
+            score += 2
+            strengths.append('Software delivery evidence detected')
+        else:
+            issues.append('Tech role fit: add repositories, deployments, APIs, tests, architecture, or production scale where applicable')
+
+    elif track == 'business_management':
+        if any(_phrase_in_text(text, term) for term in ['stakeholder', 'strategy', 'market', 'operations', 'risk', 'consulting', 'project management']):
+            score += 2
+            strengths.append('Business/management language detected')
+        else:
+            issues.append('Business role fit: add stakeholder, strategy, operations, market, finance, or risk outcomes')
+
+    else:
+        suggestions.append('General ATS mode: tailor the resume to a specific target role for sharper keyword matching')
+
+    score = max(0, min(10, score))
+    if matched_keywords:
+        strengths.append(f'{label}: matched role keywords — {", ".join(matched_keywords[:6])}')
+    elif track != 'general':
+        issues.append(f'{label}: role-specific keywords are thin; add only truthful domain terms')
+
+    return {
+        'track': track,
+        'label': label,
+        'score': score,
+        'max': 10,
+        'matched_keywords': matched_keywords[:12],
+        'missing_keywords': [kw for kw in keywords if kw not in matched_keywords][:12],
+        'strengths': strengths,
+        'issues': issues,
+        'suggestions': suggestions,
+    }
+
+
+def detect_red_flags(parsed: Dict, track: str | None = None) -> List[Dict]:
     """Return list of detected red flags with severity."""
     flags = []
     contact = parsed.get('contact', {})
     sections = parsed.get('sections', {})
     text = parsed.get('raw_text', '')
     word_count = len(text.split())
+    track = track or detect_resume_track(parsed)
 
-    # Contact
     if not contact.get('email'):
         flags.append({'flag': 'Missing email', 'severity': 'critical'})
     if not contact.get('phone'):
@@ -406,7 +541,6 @@ def detect_red_flags(parsed: Dict) -> List[Dict]:
     if not contact.get('linkedin'):
         flags.append({'flag': 'Missing LinkedIn URL', 'severity': 'medium'})
 
-    # Sections
     if not sections.get('summary'):
         flags.append({'flag': 'No professional summary/objective', 'severity': 'high'})
     if not sections.get('skills'):
@@ -416,50 +550,48 @@ def detect_red_flags(parsed: Dict) -> List[Dict]:
     if not sections.get('education'):
         flags.append({'flag': 'No education section', 'severity': 'high'})
 
-    # Action verbs
-    action_verb_count = sum(1 for v in ACTION_VERBS if v in text.lower())
+    action_verb_count = _count_phrases(text, ACTION_VERBS)
     if action_verb_count < 3:
         flags.append({'flag': 'Insufficient action verbs', 'severity': 'high'})
 
-    # Weak language
-    weak_count = sum(1 for w in WEAK_WORDS if w in text.lower())
+    weak_count = _count_phrases(text, WEAK_WORDS)
     if weak_count >= 3:
         flags.append({'flag': f'Passive/weak language detected ({weak_count} instances)', 'severity': 'medium'})
 
-    # No quantified achievements
-    quant_hits = sum(1 for p in QUANT_PATTERNS if re.search(p, text, re.IGNORECASE))
+    quant_hits = sum(1 for pattern in QUANT_PATTERNS if re.search(pattern, text, re.IGNORECASE))
     if quant_hits == 0:
         flags.append({'flag': 'No quantified achievements (numbers/percentages)', 'severity': 'high'})
 
-    # Length
     if word_count > 1000:
         flags.append({'flag': f'Resume too long ({word_count} words)', 'severity': 'medium'})
     elif word_count < 150:
         flags.append({'flag': f'Resume too short ({word_count} words)', 'severity': 'high'})
 
-    # Repeated action verbs
     verb_freq = {}
-    for v in ACTION_VERBS:
-        count = len(re.findall(r'\b' + v + r'\b', text.lower()))
+    for verb in ACTION_VERBS:
+        count = len(re.findall(r'(?<![a-z0-9])' + re.escape(verb) + r'(?![a-z0-9])', text.lower()))
         if count > 3:
-            verb_freq[v] = count
+            verb_freq[verb] = count
     if verb_freq:
-        most_repeated = max(verb_freq, key=lambda k: verb_freq[k])
+        most_repeated = max(verb_freq, key=lambda key: verb_freq[key])
         flags.append({'flag': f'Repeated action verb: "{most_repeated}" used {verb_freq[most_repeated]}x', 'severity': 'low'})
+
+    if track == 'academic_research':
+        if not sections.get('publications') and not _phrase_in_text(text, 'publication') and not _phrase_in_text(text, 'journal'):
+            flags.append({'flag': 'Academic CV mode: publications / working papers not visible', 'severity': 'medium'})
+        if not any(_phrase_in_text(text, term) for term in ['teaching', 'course', 'class', 'student', 'mentored']):
+            flags.append({'flag': 'Academic CV mode: teaching/mentoring evidence not visible', 'severity': 'medium'})
+    if track == 'healthcare_analytics' and not any(_phrase_in_text(text, term) for term in ['patient', 'clinical', 'hospital', 'medical', 'healthcare']):
+        flags.append({'flag': 'Healthcare fit: clinical/healthcare context is weak', 'severity': 'medium'})
 
     return flags
 
 
-# ─────────────────────────────────────────────
-# MAIN SCORING FUNCTION
-# ─────────────────────────────────────────────
-
 def score_resume(parsed: Dict) -> Dict:
-    """
-    Run full ATS scoring on a parsed resume.
-    Returns a comprehensive scoring report.
-    """
-    # Run individual scorers
+    """Run full ATS scoring on a parsed resume and return a scoring report."""
+    track = detect_resume_track(parsed)
+    role_context = score_role_context(parsed, track)
+
     contact_score, contact_strengths, contact_issues = score_contact_info(parsed)
     summary_score, summary_strengths, summary_issues = score_summary(parsed)
     edu_score, edu_strengths, edu_issues = score_education(parsed)
@@ -475,20 +607,22 @@ def score_resume(parsed: Dict) -> Dict:
 
     all_strengths = (contact_strengths + summary_strengths + edu_strengths +
                      skills_strengths + exp_strengths + verb_strengths +
-                     quant_strengths + format_strengths + length_strengths)
+                     quant_strengths + format_strengths + length_strengths +
+                     role_context.get('strengths', []))
     all_issues = (contact_issues + summary_issues + edu_issues + skills_issues +
-                  exp_issues + verb_issues + quant_issues + format_issues + length_issues)
+                  exp_issues + verb_issues + quant_issues + format_issues + length_issues +
+                  role_context.get('issues', []) + role_context.get('suggestions', []))
 
-    # Classify issues
-    critical_fixes = [i for i in all_issues if any(w in i.lower() for w in ['missing', 'no ', 'critical', 'almost no'])]
-    quick_wins = [i for i in all_issues if i not in critical_fixes]
-
-    red_flags = detect_red_flags(parsed)
+    critical_fixes = [issue for issue in all_issues if any(word in issue.lower() for word in ['missing', 'no ', 'critical', 'almost no', 'not visible'])]
+    quick_wins = [issue for issue in all_issues if issue not in critical_fixes]
+    red_flags = detect_red_flags(parsed, track)
 
     return {
-        'total_score': total,
+        'total_score': max(0, min(100, total)),
         'max_score': 100,
         'grade': _get_grade(total),
+        'detected_track': track,
+        'role_context': role_context,
         'sections': {
             'contact_info': {'score': contact_score, 'max': 10},
             'professional_summary': {'score': summary_score, 'max': 10},
@@ -500,22 +634,32 @@ def score_resume(parsed: Dict) -> Dict:
             'ats_formatting': {'score': format_score, 'max': 10},
             'length_readability': {'score': length_score, 'max': 5},
         },
-        'strengths': all_strengths,
-        'issues': all_issues,
-        'critical_fixes': critical_fixes,
-        'quick_wins': quick_wins,
+        'strengths': _dedupe(all_strengths),
+        'issues': _dedupe(all_issues),
+        'critical_fixes': _dedupe(critical_fixes),
+        'quick_wins': _dedupe(quick_wins),
         'red_flags': red_flags,
     }
+
+
+def _dedupe(items: List[str]) -> List[str]:
+    seen = set()
+    result = []
+    for item in items:
+        key = item.lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
 
 
 def _get_grade(score: int) -> str:
     if score >= 85:
         return 'A - Excellent'
-    elif score >= 70:
+    if score >= 70:
         return 'B - Good'
-    elif score >= 55:
+    if score >= 55:
         return 'C - Average'
-    elif score >= 40:
+    if score >= 40:
         return 'D - Needs Work'
-    else:
-        return 'F - Poor'
+    return 'F - Critical Issues'

@@ -80,7 +80,12 @@ from modules.templates import render_resume_html
 html = render_resume_html(DEMO_BUILDER_DATA)
 print(f"[OK] HTML Template: {len(html)} chars")
 
-# Test 12: Role Profiles
+# Test 12: UI Component Imports
+from modules.ui_components import render_role_lens_panel, render_red_flags_list
+assert callable(render_role_lens_panel) and callable(render_red_flags_list)
+print("[OK] UI Components: manual ATS role lens importable")
+
+# Test 13: Role Profiles
 from modules.role_profiles import get_all_roles, get_role_profile
 roles = get_all_roles()
 profile = get_role_profile('Data Analyst')

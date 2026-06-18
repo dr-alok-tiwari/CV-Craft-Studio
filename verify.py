@@ -69,21 +69,23 @@ tex = export_latex_resume(DEMO_BUILDER_DATA)
 assert "\\documentclass" in tex and "\\begin{document}" in tex
 print(f"[OK] LaTeX Export: {len(tex)} chars")
 
-# Test 10: ATS Rewrite
+# Test 10: ATS Rewrite Engine
 from modules.ats_rewriter import rewrite_resume_from_ats
 rewrite_result = rewrite_resume_from_ats(DEMO_BUILDER_DATA, parsed, score, match)
 assert rewrite_result.get('resume_data') and rewrite_result.get('new_score') is not None
-print(f"[OK] ATS Rewrite: {rewrite_result.get('old_score')} -> {rewrite_result.get('new_score')}")
+print(f"[OK] ATS Rewrite Engine: {rewrite_result.get('old_score')} -> {rewrite_result.get('new_score')}")
 
 # Test 11: HTML Template
 from modules.templates import render_resume_html
 html = render_resume_html(DEMO_BUILDER_DATA)
 print(f"[OK] HTML Template: {len(html)} chars")
 
-# Test 12: UI Component Imports
-from modules.ui_components import render_role_lens_panel, render_red_flags_list
+# Test 12: UI Component Imports and Preview Panel
+from modules.ui_components import render_role_lens_panel, render_red_flags_list, render_ats_rewrite_panel
+from modules.ats_preview_ui import render_ats_rewrite_preview_panel
 assert callable(render_role_lens_panel) and callable(render_red_flags_list)
-print("[OK] UI Components: manual ATS role lens importable")
+assert callable(render_ats_rewrite_panel) and callable(render_ats_rewrite_preview_panel)
+print("[OK] UI Components: manual role lens and preview-first ATS panel importable")
 
 # Test 13: Role Profiles
 from modules.role_profiles import get_all_roles, get_role_profile

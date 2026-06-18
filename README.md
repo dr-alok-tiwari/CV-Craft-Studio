@@ -165,13 +165,4 @@ No API keys are required.
 
 ---
 
-## Changelog in This Build
 
-- Renamed the app to **CV-Craft-Studio**.
-- Replaced the dark purple/teal UI with a clean saffron professional theme.
-- Removed text-obscuring gradients from the major UI components.
-- Improved text contrast across sidebar, cards, inputs, tabs, buttons, metrics, and alerts.
-- Fixed the bullet improver so it no longer creates awkward strings such as “Developed analyzed...”.
-- Added a local **Resume Improvement Report** generator and download option.
-- Updated Streamlit theme configuration to light saffron mode.
-- Removed generated cache files from the packaged ZIP.

@@ -1,7 +1,7 @@
 """
 CV-Craft-Studio - UI Components
 Shared Streamlit UI helpers: score cards, gauges, charts, chips, quick actions,
-ATS rewrite action panel, and visual banners.
+ATS role lens selector, ATS rewrite action panel, and visual banners.
 """
 
 from __future__ import annotations
@@ -32,6 +32,27 @@ C = {
 PLOTLY_BG = "rgba(0,0,0,0)"
 PLOTLY_FONT = {"color": C["text"], "family": "Inter, sans-serif"}
 PLOTLY_GRID = "rgba(180,83,9,0.12)"
+
+
+ROLE_LENS_OPTIONS = {
+    "Auto-detect from resume": None,
+    "Academic / Research CV": "academic_research",
+    "Healthcare Analytics / AI in Healthcare": "healthcare_analytics",
+    "Data / Analytics Resume": "data_analytics",
+    "Software / Tech Resume": "software_tech",
+    "Business / Management Resume": "business_management",
+    "General ATS Resume": "general",
+}
+
+ROLE_MESSAGE_MARKERS = [
+    "Academic CV mode:", "Healthcare role fit:", "Data role fit:", "Tech role fit:",
+    "Business role fit:", "General ATS mode:", "Academic / Research CV:",
+    "Healthcare Analytics / AI in Healthcare:", "Data / Analytics Resume:",
+    "Software / Tech Resume:", "Business / Management Resume:", "General ATS Resume:",
+    "Academic evidence detected", "Teaching evidence detected", "Research methods or analytical capability detected",
+    "Healthcare domain evidence detected", "Analytics tool/domain evidence detected",
+    "Software delivery evidence detected", "Business/management language detected",
+]
 
 
 def score_color(score: int) -> str:
@@ -166,6 +187,95 @@ def _is_ats_page() -> bool:
     return "ATS Resume Scorer" in str(st.session_state.get("nav_radio", ""))
 
 
+def _strip_role_messages(items: List[str]) -> List[str]:
+    clean = []
+    for item in items or []:
+        if not any(marker in item for marker in ROLE_MESSAGE_MARKERS):
+            clean.append(item)
+    return clean
+
+
+def _dedupe_strings(items: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for item in items or []:
+        key = str(item).lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+def render_role_lens_panel():
+    """Manual role-lens selector for ATS diagnostics without editing app.py."""
+    if not _is_ats_page() or not st.session_state.get("ats_score"):
+        return
+    parsed = st.session_state.get("parsed_resume")
+    if not parsed:
+        return
+    score = st.session_state.get("ats_score") or {}
+    current_context = score.get("role_context", {}) or {}
+    current_track = score.get("detected_track") or current_context.get("track") or "general"
+    current_label = current_context.get("label", current_track.replace("_", " ").title())
+
+    st.markdown("---")
+    st.markdown("### 🎯 ATS Role Lens")
+    st.caption("Auto-detection is useful, but users can override the lens for Academic, Healthcare, Data, Tech, Business, or General resumes.")
+
+    default_option = "Auto-detect from resume"
+    for label, track in ROLE_LENS_OPTIONS.items():
+        if track == current_track:
+            default_option = label
+            break
+    options = list(ROLE_LENS_OPTIONS.keys())
+    selected_label = st.selectbox(
+        "Choose scoring lens",
+        options=options,
+        index=options.index(default_option) if default_option in options else 0,
+        key="ats_manual_role_lens_select",
+        help="This changes the role-specific diagnostics and improvement report context. The core 100-point ATS score remains comparable.",
+    )
+
+    col_a, col_b = st.columns([1, 2])
+    with col_a:
+        apply_lens = st.button("Apply Role Lens", key="apply_manual_role_lens", type="primary", use_container_width=True)
+    with col_b:
+        st.info(f"Current lens: {current_label} | Role-context score: {current_context.get('score', '-')}/{current_context.get('max', 10)}")
+
+    if apply_lens:
+        try:
+            from modules.scorer import detect_resume_track, score_role_context, detect_red_flags
+            track = ROLE_LENS_OPTIONS[selected_label] or detect_resume_track(parsed)
+            context = score_role_context(parsed, track)
+            score["detected_track"] = track
+            score["role_context"] = context
+            score["red_flags"] = detect_red_flags(parsed, track)
+            score["strengths"] = _dedupe_strings(_strip_role_messages(score.get("strengths", [])) + context.get("strengths", []))
+            role_issues = context.get("issues", []) + context.get("suggestions", [])
+            score["issues"] = _dedupe_strings(_strip_role_messages(score.get("issues", [])) + role_issues)
+            score["quick_wins"] = _dedupe_strings(_strip_role_messages(score.get("quick_wins", [])) + role_issues)
+            score["critical_fixes"] = [i for i in score.get("issues", []) if any(w in i.lower() for w in ["missing", "no ", "critical", "almost no", "not visible"])]
+            st.session_state.ats_score = score
+            st.success(f"✅ Role lens applied: {context.get('label')}")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not apply role lens: {exc}")
+
+    context = (st.session_state.get("ats_score") or {}).get("role_context", {}) or {}
+    if context:
+        with st.expander("View role-specific keyword diagnostics", expanded=False):
+            matched = context.get("matched_keywords", [])
+            missing = context.get("missing_keywords", [])
+            c1, c2 = st.columns(2)
+            with c1:
+                render_keyword_chips(matched, color=C["green"], label="Matched role keywords")
+            with c2:
+                render_keyword_chips(missing, color=C["orange"], label="Missing / weak role keywords")
+            role_notes = context.get("issues", []) + context.get("suggestions", [])
+            for note in role_notes[:8]:
+                render_suggestion(note, "warning")
+
+
 def render_ats_rewrite_panel():
     if not _is_ats_page() or not st.session_state.get("ats_score"):
         return
@@ -229,6 +339,7 @@ def render_ats_rewrite_panel():
 
 
 def render_red_flags_list(flags: List[Dict]):
+    render_role_lens_panel()
     if not flags:
         st.success("✅ No critical red flags detected!")
     else:
